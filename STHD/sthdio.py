@@ -137,12 +137,8 @@ class STHD:
         new = copy.deepcopy(self)
         return new
 
-    def load_img(self, path = None):
-        if path is None:
-            img = tifffile.TiffFile(self.fullresimg_path).asarray()
-        else:
-            img = tifffile.TiffFile(path).asarray()
-        return img
+    def load_img(self):
+        img = tifffile.TiffFile(self.fullresimg_path).asarray()
 
     def crop_img(self, img, x1, y1, x2, y2):
         """x1 = 45450
