@@ -19,7 +19,14 @@ import torch.optim as optim
 def train_pytorch(sthd_data, n_iter, step_size, beta, device='cuda' if torch.cuda.is_available() else 'cpu'):
     print("[Log] Preparing constants and training weights")
     
-    # Load and prepare data tensors
+    # Prepare constants
+    # - X: number of spots (each spot: a).
+    # - Y: number of genes after filtering (each gene: g).
+    # - Z: number of cell types (each type: t).
+    # - F: $$ (-lambda + n^g_a * log(-lambda)) $$. This is the part of the
+    #      log-likelihood loss without parameters, so it can be precomputed.
+    # - Ascr_row: indptr for sparse matrix representation of space connectivity.
+    # - Ascr_col: indices for sparse matrix representation of space connectivity.
     X, Y, Z, F, Acsr_row, Acsr_col = model.prepare_constants(sthd_data)  # Assume preprocessed as tensors
     
     # Convert to PyTorch tensors and move to device
@@ -29,8 +36,10 @@ def train_pytorch(sthd_data, n_iter, step_size, beta, device='cuda' if torch.cud
     F = torch.tensor(F, dtype=torch.float32, device=device, requires_grad=False)
     
     # Initialize model parameters (weights)
+    # W: weight matrix of each cell type at each spot.
     W = torch.randn_like(X, requires_grad=True, device=device)
-    P = torch.softmax(W, dim=1)  # Probability tensor (for cell type assignment)
+    # P: probability tensor for cell type assignment.
+    P = torch.softmax(W, dim=1)
     
     # Optimizer
     optimizer = optim.Adam([W], lr=step_size)
