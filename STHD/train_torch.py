@@ -30,14 +30,14 @@ def train_pytorch(sthd_data, n_iter, step_size, beta, device='cuda' if torch.cud
     X, Y, Z, F, Acsr_row, Acsr_col = model.prepare_constants(sthd_data)  # Assume preprocessed as tensors
     
     # Convert to PyTorch tensors and move to device
-    X = torch.tensor(X, dtype=torch.float32, device=device, requires_grad=True)
+    X = torch.tensor(X, dtype=torch.float32, device=device, requires_grad=False)
     Y = torch.tensor(Y, dtype=torch.float32, device=device, requires_grad=False)
     Z = torch.tensor(Z, dtype=torch.float32, device=device, requires_grad=False)
     F = torch.tensor(F, dtype=torch.float32, device=device, requires_grad=False)
     
     # Initialize model parameters (weights)
     # W: weight matrix of each cell type at each spot.
-    W = torch.randn_like(X, requires_grad=True, device=device)
+    W = torch.ones(size=[X, Z], requires_grad=True, device=device)
     # P: probability tensor for cell type assignment.
     P = torch.softmax(W, dim=1)
     
