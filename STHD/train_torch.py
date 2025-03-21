@@ -74,9 +74,10 @@ def calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z):
     return res
 
 
-def train_pytorch(sthd_data, n_iter, step_size, beta, device='cuda' if torch.cuda.is_available() else 'cpu'):
+def train_pytorch(sthd_data, n_iter, step_size, beta,
+                  device='cuda' if torch.cuda.is_available() else 'cpu'):
     print("[Log] Preparing constants and training weights")
-    
+
     # Prepare constants
     # - X: number of spots (each spot: a).
     # - Y: number of genes after filtering (each gene: g).
@@ -86,52 +87,49 @@ def train_pytorch(sthd_data, n_iter, step_size, beta, device='cuda' if torch.cud
     # - Ascr_row: indptr for sparse matrix representation of space connectivity.
     # - Ascr_col: indices for sparse matrix representation of space connectivity.
     X, Y, Z, F, Acsr_row, Acsr_col = model.prepare_constants(sthd_data)
-    
+
     # Convert to PyTorch tensors and move to device
-    X = torch.tensor(X, dtype=torch.float32, device=device, requires_grad=False)
-    Y = torch.tensor(Y, dtype=torch.float32, device=device, requires_grad=False)
-    Z = torch.tensor(Z, dtype=torch.float32, device=device, requires_grad=False)
     F = torch.tensor(F, dtype=torch.float32, device=device, requires_grad=False)
-    
+
     # Initialize model parameters (weights)
     # W: weight matrix of each cell type at each spot.
-    W = torch.ones(size=[X, Z], requires_grad=True, device=device)
+    W = torch.ones(size=[X, Z], requires_grad=True, device=device, dtype="float32")
     # P: probability tensor for cell type assignment.
     # $$ P_a(t) = softmax(W) = exp(w_a^t) / sum(exp(w_a^t)) $$
     # dim=1 so that the sum of each row (spot) is 1.
-    P = torch.softmax(W, dim=1)
-    
+    P = torch.softmax(W, dim=1, dtype="float32")
+
     # Optimizer
     optimizer = optim.Adam([W], lr=step_size)
-    
-    # Loss functions    
+
+    # Loss functions
     print("[Log] Training...")
     print(f"{'iter':<10}{'time (min)':<15}{'total loss':<15}{'LL loss':<15}{'CE loss':<15}")
     for i in range(n_iter):
         start = time.time()
         optimizer.zero_grad()
-        
+
         # Poisson log-likelihood loss for gene expression modeling
         ll_loss = calculate_ll(P, F, X, Y, Z)
-        
+
         # Cross-entropy loss for neighborhood similarity
         ce_loss = calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z)
-        
+
         # Total loss (weighted sum)
         loss = -ll_loss + beta * ce_loss
-        
+
         # Backpropagation and optimization
         loss.backward()
         optimizer.step()
-        
+
         # Update probability tensor
         with torch.no_grad():
-            P = torch.softmax(W, dim=1)
-        
+            P = torch.softmax(W, dim=1, dtype="float32")
+
         end = time.time()
         duration = (end - start) / 60.0
         print(f'{i:<10}{duration:<15.2f}{loss:<15.4f}{ll_loss:<15.4f}{ce_loss:<15.4f}')
-    
+
     print("[Log] Training complete.")
     return P  # Return final cell type probabilities
 
@@ -397,9 +395,9 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    
+
     main(args)
-    
+
     """
     # quick test
     class Args:
