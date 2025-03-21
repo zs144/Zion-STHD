@@ -63,7 +63,7 @@ def calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z):
     Z : int
         number of cell types (each type: t).
     """
-    G = torch.zeros([X, Z], dtype="float32")
+    G = torch.zeros((X, Z), dtype=torch.float32, device=P.device)
     for a in range(X):
         neighbors = csr_obtain_column_index_for_row(Acsr_row, Acsr_col, a)
         for t in range(Z):
@@ -93,11 +93,11 @@ def train_pytorch(sthd_data, n_iter, step_size, beta,
 
     # Initialize model parameters (weights)
     # W: weight matrix of each cell type at each spot.
-    W = torch.ones(size=[X, Z], requires_grad=True, device=device, dtype="float32")
+    W = torch.ones((X, Z), device=device, dtype=torch.float32, requires_grad=True)
     # P: probability tensor for cell type assignment.
     # $$ P_a(t) = softmax(W) = exp(w_a^t) / sum(exp(w_a^t)) $$
     # dim=1 so that the sum of each row (spot) is 1.
-    P = torch.softmax(W, dim=1, dtype="float32")
+    P = torch.softmax(W, dim=1, dtype=torch.float32)
 
     # Optimizer
     optimizer = optim.Adam([W], lr=step_size)
@@ -106,7 +106,7 @@ def train_pytorch(sthd_data, n_iter, step_size, beta,
     print("[Log] Training...")
     print(f"{'iter':<10}{'time (min)':<15}{'total loss':<15}{'LL loss':<15}{'CE loss':<15}")
     for i in range(n_iter):
-        start = time.time()
+        start = time()
         optimizer.zero_grad()
 
         # Poisson log-likelihood loss for gene expression modeling
@@ -124,9 +124,9 @@ def train_pytorch(sthd_data, n_iter, step_size, beta,
 
         # Update probability tensor
         with torch.no_grad():
-            P = torch.softmax(W, dim=1, dtype="float32")
+            P = torch.softmax(W, dim=1, dtype=torch.float32)
 
-        end = time.time()
+        end = time()
         duration = (end - start) / 60.0
         print(f'{i:<10}{duration:<15.2f}{loss.detach().cpu():<15.4f}' +
               f'{ll_loss.detach().cpu():<15.4f}{ce_loss.detach().cpu():<15.4f}')
