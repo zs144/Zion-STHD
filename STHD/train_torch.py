@@ -8,6 +8,7 @@ python3 STHD/train.py --refile ../testdata/crc_average_expr_genenorm_lambda_98ct
 import argparse
 import os
 from time import time
+from numba import njit, prange
 
 import pandas as pd
 import model, qcmask, refscrna, sthdio
@@ -16,6 +17,16 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+@njit(parallel=True, fastmath=True)
+def calculate_ll(P, F, X, Y, Z):
+    res = 0 # aggregated poisson log-likelihood loss
+    for a in prange(X): # for each spot a
+        for t in range(Z): # for each cell type t
+            res = res + P[a, t] * F[a, t]
+    res = res / X
+    return res
+
+
 def train_pytorch(sthd_data, n_iter, step_size, beta, device='cuda' if torch.cuda.is_available() else 'cpu'):
     print("[Log] Preparing constants and training weights")
     
@@ -23,11 +34,11 @@ def train_pytorch(sthd_data, n_iter, step_size, beta, device='cuda' if torch.cud
     # - X: number of spots (each spot: a).
     # - Y: number of genes after filtering (each gene: g).
     # - Z: number of cell types (each type: t).
-    # - F: $$ (-lambda + n^g_a * log(-lambda)) $$. This is the part of the
-    #      log-likelihood loss without parameters, so it can be precomputed.
+    # - F: $$ \sum_g (-lambda + n^g_a * log(-lambda)) $$. shape=(X, Z).
+    #      The part of LL loss without the parameters, so it can be precomputed.
     # - Ascr_row: indptr for sparse matrix representation of space connectivity.
     # - Ascr_col: indices for sparse matrix representation of space connectivity.
-    X, Y, Z, F, Acsr_row, Acsr_col = model.prepare_constants(sthd_data)  # Assume preprocessed as tensors
+    X, Y, Z, F, Acsr_row, Acsr_col = model.prepare_constants(sthd_data)
     
     # Convert to PyTorch tensors and move to device
     X = torch.tensor(X, dtype=torch.float32, device=device, requires_grad=False)
@@ -39,13 +50,14 @@ def train_pytorch(sthd_data, n_iter, step_size, beta, device='cuda' if torch.cud
     # W: weight matrix of each cell type at each spot.
     W = torch.ones(size=[X, Z], requires_grad=True, device=device)
     # P: probability tensor for cell type assignment.
+    # $$ P_a(t) = softmax(W) = exp(w_a^t) / sum(exp(w_a^t)) $$
+    # dim=1 so that the sum of each row (spot) is 1.
     P = torch.softmax(W, dim=1)
     
     # Optimizer
     optimizer = optim.Adam([W], lr=step_size)
     
     # Loss functions
-    poisson_loss = nn.PoissonNLLLoss(log_input=True, reduction='sum')  # Poisson log-likelihood loss
     cross_entropy_loss = nn.CrossEntropyLoss()
     
     print("[Log] Training...")
@@ -53,7 +65,7 @@ def train_pytorch(sthd_data, n_iter, step_size, beta, device='cuda' if torch.cud
         optimizer.zero_grad()
         
         # Poisson log-likelihood loss for gene expression modeling
-        ll_loss = poisson_loss(W, Y)
+        ll_loss = calculate_ll(P, F, X, Y, Z)
         
         # Cross-entropy loss for neighborhood similarity
         neighbor_loss = 0
