@@ -128,7 +128,8 @@ def train_pytorch(sthd_data, n_iter, step_size, beta,
 
         end = time.time()
         duration = (end - start) / 60.0
-        print(f'{i:<10}{duration:<15.2f}{loss:<15.4f}{ll_loss:<15.4f}{ce_loss:<15.4f}')
+        print(f'{i:<10}{duration:<15.2f}{loss.detach().cpu():<15.4f}' +
+              f'{ll_loss.detach().cpu():<15.4f}{ce_loss.detach().cpu():<15.4f}')
 
     print("[Log] Training complete.")
     return P  # Return final cell type probabilities
