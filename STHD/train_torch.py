@@ -157,8 +157,7 @@ def train_pytorch(sthd_data, n_iter, step_size, beta,
         optimizer.step()
 
         # Update probability tensor
-        with torch.no_grad():
-            P = torch.softmax(W, dim=1, dtype=torch.float32)
+        P = torch.softmax(W, dim=1, dtype=torch.float32)
 
         end = time()
         duration = (end - start) / 60.0
