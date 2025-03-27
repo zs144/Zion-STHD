@@ -7,6 +7,7 @@ import argparse
 import os
 from time import time
 
+import numpy as np
 import pandas as pd
 from STHD import model, qcmask, refscrna, sthdio
 
@@ -14,7 +15,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-def calculate_ll(P, F, X, Y, Z):
+def calculate_ll_pytorch(P, F, X):
     """ Calculate the Poisson log-likelihood loss.
     Parameters
     ----------
@@ -24,12 +25,8 @@ def calculate_ll(P, F, X, Y, Z):
       $$\sum_g (-lambda + n^g_a * log(-lambda))$$.
     X : int
         number of spots (each spot: a).
-    Y : int
-        number of genes after filtering (each gene: g).
-    Z : int
-        number of cell types (each type: t).
     """
-    # element-wise multiplication between P and F
+    # Element-wise multiplication between P and F
     res = torch.sum(P * F)
     res = res / X
     return res
@@ -43,47 +40,53 @@ def csr_obtain_column_index_for_row(row, column, i):
     return column_indices
 
 
-def calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z):
+def calculate_ce_pytorch(P, A, X):
     """ Calculate the cross-entropy loss for neighborhood similarity.
     Parameters
     ----------
     P : torch.tensor
         probability tensor for cell type assignment.
     Ascr_row : list
-        indptr for sparse matrix representation of space connectivity.
+        indptr for (CSR) sparse matrix representation of space connectivity.
     Acsr_col : list
-        indices for sparse matrix representation of space connectivity.
+        indices for (CSR) sparse matrix representation of space connectivity.
     X : int
         number of spots (each spot: a).
-    Y : int
-        number of genes after filtering (each gene: g).
-    Z : int
-        number of cell types (each type: t).
     """
-    row_indices = []
-    col_indices = []
-    data = []
-
-    for a in range(X):
-        neighbors = csr_obtain_column_index_for_row(Acsr_row, Acsr_col, a)
-        for a_star in neighbors:
-            row_indices.append(a)
-            col_indices.append(a_star)
-            data.append(1.0)
-
-    indices = torch.LongTensor([row_indices, col_indices])
-    values  = torch.FloatTensor(data)
-    A = torch.sparse_coo_tensor(
-        indices, values, size=(X, X), device=P.device, dtype=torch.float32
-    )
-
     # Compute G[a,t] = Σ_{a_star in neighbors(a)} log(P[a_star,t])
     logP = torch.log(P)
-    G = torch.sparse.mm(A, logP)  # shape: X×Z
+    G = torch.sparse.mm(A, logP)
 
-    # Then do the usual res = Σ(P[a,t] * G[a,t]) / X
-    res = - torch.sum(P * G) / X
+    # Element-wise multiplication between P and G
+    res = - torch.sum(P * G)
+    res = res / X
     return res
+
+
+def scipy_csr_to_torch_csr(scipy_csr_matrix, device):
+    crow_indices = torch.from_numpy(scipy_csr_matrix.indptr).long()
+    col_indices = torch.from_numpy(scipy_csr_matrix.indices).long()
+    data_values = torch.from_numpy(scipy_csr_matrix.data)
+    size = scipy_csr_matrix.shape
+
+    torch_csr_matrix = torch.sparse_csr_tensor(
+        crow_indices, col_indices, data_values, size=size,
+        device=device, dtype=torch.float32
+    )
+    return torch_csr_matrix
+
+
+def scipy_coo_to_torch_coo(scipy_coo_matrix, device):
+    row_indices = scipy_coo_matrix.row
+    col_indices = scipy_coo_matrix.col
+    indices = torch.LongTensor(np.array([row_indices, col_indices]))
+    data_values = torch.from_numpy(scipy_coo_matrix.data)
+    size = scipy_coo_matrix.shape
+
+    torch_coo_matrix = torch.sparse_coo_tensor(
+        indices, data_values, size=size, device=device, dtype=torch.float32
+    )
+    return torch_coo_matrix
 
 
 def train_pytorch(sthd_data, n_iter, step_size, beta,
@@ -96,12 +99,14 @@ def train_pytorch(sthd_data, n_iter, step_size, beta,
     # - Z: number of cell types (each type: t).
     # - F: $$ \sum_g (-lambda + n^g_a * log(-lambda)) $$. shape=(X, Z).
     #      The part of LL loss without the parameters, so it can be precomputed.
-    # - Ascr_row: indptr for sparse matrix representation of space connectivity.
-    # - Ascr_col: indices for sparse matrix representation of space connectivity.
-    X, Y, Z, F, Acsr_row, Acsr_col = model.prepare_constants(sthd_data)
+    # - A: CSR sparse matrix representation of space connectivity.
+    X, Y, Z, F, A = model.prepare_constants_torch(sthd_data)
+    # A = scipy_csr_to_torch_csr(A, device=device)
+    A = A.tocoo()
+    A = scipy_coo_to_torch_coo(A, device=device)
 
     # Convert to PyTorch tensors and move to device
-    F = torch.tensor(F, dtype=torch.float32, device=device, requires_grad=False)
+    F = torch.tensor(F, dtype=torch.float32, device=device)
 
     # Initialize model parameters (weights)
     # W: weight matrix of each cell type at each spot.
@@ -122,10 +127,10 @@ def train_pytorch(sthd_data, n_iter, step_size, beta,
         optimizer.zero_grad()
 
         # Poisson log-likelihood loss for gene expression modeling
-        ll_loss = calculate_ll(P, F, X, Y, Z)
+        ll_loss = calculate_ll_pytorch(P, F, X)
 
         # Cross-entropy loss for neighborhood similarity
-        ce_loss = calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z)
+        ce_loss = calculate_ce_pytorch(P, A, X)
 
         # Total loss (weighted sum)
         loss = -ll_loss + beta * ce_loss
@@ -172,6 +177,7 @@ def train(sthd_data, n_iter, step_size, beta, debug=False, early_stop=False):
         weights=(W, eW, P, Phi, ll_wat, ce_wat, m, v),
         early_stop=early_stop,  # True will trigger early_stop criteria, False will run through all n_iter
     )
+    print("[Log] Training complete.")
     if debug:
         return P, metrics
     else:
@@ -407,9 +413,9 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    
+
     main(args)
-    
+
     """
     # quick test
     class Args:
