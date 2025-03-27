@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-def calculate_ll(P, F, X, Y, Z):
+def calculate_ll_pytorch(P, F, X):
     """ Calculate the Poisson log-likelihood loss.
     Parameters
     ----------
@@ -26,10 +26,6 @@ def calculate_ll(P, F, X, Y, Z):
       $$\sum_g (-lambda + n^g_a * log(-lambda))$$.
     X : int
         number of spots (each spot: a).
-    Y : int
-        number of genes after filtering (each gene: g).
-    Z : int
-        number of cell types (each type: t).
     """
     # element-wise multiplication between P and F
     res = torch.sum(P * F)
@@ -45,7 +41,7 @@ def csr_obtain_column_index_for_row(row, column, i):
     return column_indices
 
 
-def calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z):
+def calculate_ce_pytorch(P, Acsr_row, Acsr_col, X):
     """ Calculate the cross-entropy loss for neighborhood similarity.
     Parameters
     ----------
@@ -57,16 +53,9 @@ def calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z):
         indices for sparse matrix representation of space connectivity.
     X : int
         number of spots (each spot: a).
-    Y : int
-        number of genes after filtering (each gene: g).
-    Z : int
-        number of cell types (each type: t).
     """
-    # P_np = P.detach().cpu().numpy()
-    # G = np.zeros((X, Z))
-    # model.fill_G(X, Z, P_np, Acsr_row, Acsr_col, G)
-    # G = torch.tensor(G, dtype=torch.float32, device=P.device)
-
+    # version 1: failed
+    # --------------------------------------------------------------------------
     # G = torch.zeros((X, Z), dtype=torch.float32, device=P.device)
     # for a in range(X):
     #     neighbors = csr_obtain_column_index_for_row(Acsr_row, Acsr_col, a)
@@ -76,7 +65,18 @@ def calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z):
     # res = torch.sum(P * G)
     # res = res / X
     # return res
+    # --------------------------------------------------------------------------
 
+    # version 2: failed
+    # --------------------------------------------------------------------------
+    # P_np = P.detach().cpu().numpy()
+    # G = np.zeros((X, Z))
+    # model.fill_G(X, Z, P_np, Acsr_row, Acsr_col, G)
+    # G = torch.tensor(G, dtype=torch.float32, device=P.device)
+    # --------------------------------------------------------------------------
+
+    # version 3: succeed
+    # --------------------------------------------------------------------------
     # Build sparse adjacency as a COO tensor:
     # A[a, a_star] = 1 if a_star is in neighbors(a).
     # Then we can do G = A @ logP in one parallel operation.
@@ -144,11 +144,11 @@ def train_pytorch(sthd_data, n_iter, step_size, beta,
         optimizer.zero_grad()
 
         # Poisson log-likelihood loss for gene expression modeling
-        ll_loss = calculate_ll(P, F, X, Y, Z)
+        ll_loss = calculate_ll_pytorch(P, F, X)
         # print("Done: ll_loss") # TODO: remove this after debugging
 
         # Cross-entropy loss for neighborhood similarity
-        ce_loss = calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z)
+        ce_loss = calculate_ce_pytorch(P, Acsr_row, Acsr_col, X)
         # print("Done: ce_loss") # TODO: remove this after debugging
 
         # Total loss (weighted sum)
