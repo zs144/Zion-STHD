@@ -10,6 +10,141 @@ from time import time
 import pandas as pd
 from STHD import model, qcmask, refscrna, sthdio
 
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+def calculate_ll(P, F, X, Y, Z):
+    """ Calculate the Poisson log-likelihood loss.
+    Parameters
+    ----------
+    P : torch.tensor
+        probability tensor for cell type assignment.
+    F : torch.tensor
+      $$\sum_g (-lambda + n^g_a * log(-lambda))$$.
+    X : int
+        number of spots (each spot: a).
+    Y : int
+        number of genes after filtering (each gene: g).
+    Z : int
+        number of cell types (each type: t).
+    """
+    # element-wise multiplication between P and F
+    res = torch.sum(P * F)
+    res = res / X
+    return res
+
+
+def csr_obtain_column_index_for_row(row, column, i):
+    # get row i's non-zero items' column index
+    row_start = row[i]
+    row_end = row[i + 1]
+    column_indices = column[row_start:row_end]
+    return column_indices
+
+
+def calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z):
+    """ Calculate the cross-entropy loss for neighborhood similarity.
+    Parameters
+    ----------
+    P : torch.tensor
+        probability tensor for cell type assignment.
+    Ascr_row : list
+        indptr for sparse matrix representation of space connectivity.
+    Acsr_col : list
+        indices for sparse matrix representation of space connectivity.
+    X : int
+        number of spots (each spot: a).
+    Y : int
+        number of genes after filtering (each gene: g).
+    Z : int
+        number of cell types (each type: t).
+    """
+    row_indices = []
+    col_indices = []
+    data = []
+
+    for a in range(X):
+        neighbors = csr_obtain_column_index_for_row(Acsr_row, Acsr_col, a)
+        for a_star in neighbors:
+            row_indices.append(a)
+            col_indices.append(a_star)
+            data.append(1.0)
+
+    indices = torch.LongTensor([row_indices, col_indices])
+    values  = torch.FloatTensor(data)
+    A = torch.sparse_coo_tensor(
+        indices, values, size=(X, X), device=P.device, dtype=torch.float32
+    )
+
+    # Compute G[a,t] = Σ_{a_star in neighbors(a)} log(P[a_star,t])
+    logP = torch.log(P)
+    G = torch.sparse.mm(A, logP)  # shape: X×Z
+
+    # Then do the usual res = Σ(P[a,t] * G[a,t]) / X
+    res = - torch.sum(P * G) / X
+    return res
+
+
+def train_pytorch(sthd_data, n_iter, step_size, beta,
+                  device='cuda' if torch.cuda.is_available() else 'cpu'):
+    print("[Log] Preparing constants and training weights")
+
+    # Prepare constants
+    # - X: number of spots (each spot: a).
+    # - Y: number of genes after filtering (each gene: g).
+    # - Z: number of cell types (each type: t).
+    # - F: $$ \sum_g (-lambda + n^g_a * log(-lambda)) $$. shape=(X, Z).
+    #      The part of LL loss without the parameters, so it can be precomputed.
+    # - Ascr_row: indptr for sparse matrix representation of space connectivity.
+    # - Ascr_col: indices for sparse matrix representation of space connectivity.
+    X, Y, Z, F, Acsr_row, Acsr_col = model.prepare_constants(sthd_data)
+
+    # Convert to PyTorch tensors and move to device
+    F = torch.tensor(F, dtype=torch.float32, device=device, requires_grad=False)
+
+    # Initialize model parameters (weights)
+    # W: weight matrix of each cell type at each spot.
+    W = torch.ones((X, Z), device=device, dtype=torch.float32, requires_grad=True)
+    # P: probability tensor for cell type assignment.
+    # $$ P_a(t) = softmax(W) = exp(w_a^t) / sum(exp(w_a^t)) $$
+    # dim=1 so that the sum of each row (spot) is 1.
+    P = torch.softmax(W, dim=1, dtype=torch.float32)
+
+    # Optimizer
+    optimizer = optim.Adam([W], lr=step_size)
+
+    # Loss functions
+    print("[Log] Training...")
+    print(f"{'iter':<10}{'time (min)':<15}{'total loss':<15}{'LL loss':<15}{'CE loss':<15}")
+    for i in range(n_iter):
+        start = time()
+        optimizer.zero_grad()
+
+        # Poisson log-likelihood loss for gene expression modeling
+        ll_loss = calculate_ll(P, F, X, Y, Z)
+
+        # Cross-entropy loss for neighborhood similarity
+        ce_loss = calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z)
+
+        # Total loss (weighted sum)
+        loss = -ll_loss + beta * ce_loss
+
+        # Backpropagation and optimization
+        loss.backward()
+        optimizer.step()
+
+        # Update probability tensor
+        P = torch.softmax(W, dim=1, dtype=torch.float32)
+
+        end = time()
+        duration = (end - start) / 60.0
+        print(f'{i:<10}{duration:<15.2f}{loss.detach().cpu():<15.4f}' +
+              f'{ll_loss.detach().cpu():<15.4f}{ce_loss.detach().cpu():<15.4f}')
+
+    print("[Log] Training complete.")
+    return P  # Return final cell type probabilities
+
 
 def sthdata_match_refgene(sthd_data, refile, ref_gene_filter=True, ref_renorm=False):
     genemeanpd_filtered = refscrna.load_scrna_ref(refile)
