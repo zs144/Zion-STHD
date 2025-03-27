@@ -145,16 +145,20 @@ def train_pytorch(sthd_data, n_iter, step_size, beta,
 
         # Poisson log-likelihood loss for gene expression modeling
         ll_loss = calculate_ll(P, F, X, Y, Z)
+        # print("Done: ll_loss") # TODO: remove this after debugging
 
         # Cross-entropy loss for neighborhood similarity
         ce_loss = calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z)
+        # print("Done: ce_loss") # TODO: remove this after debugging
 
         # Total loss (weighted sum)
         loss = -ll_loss + beta * ce_loss
 
         # Backpropagation and optimization
         loss.backward()
+        # print("Done: backprop") # TODO: remove this after debugging
         optimizer.step()
+        # print("Done: update W") # TODO: remove this after debugging
 
         # Update probability tensor
         P = torch.softmax(W, dim=1, dtype=torch.float32)
