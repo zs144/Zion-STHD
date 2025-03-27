@@ -8,7 +8,6 @@ python3 STHD/train.py --refile ../testdata/crc_average_expr_genenorm_lambda_98ct
 import argparse
 import os
 from time import time
-import numpy as np
 
 import pandas as pd
 import model, qcmask, refscrna, sthdio
@@ -63,14 +62,49 @@ def calculate_ce(P, Acsr_row, Acsr_col, X, Y, Z):
     Z : int
         number of cell types (each type: t).
     """
-    G = torch.zeros((X, Z), dtype=torch.float32, device=P.device)
+    # P_np = P.detach().cpu().numpy()
+    # G = np.zeros((X, Z))
+    # model.fill_G(X, Z, P_np, Acsr_row, Acsr_col, G)
+    # G = torch.tensor(G, dtype=torch.float32, device=P.device)
+
+    # G = torch.zeros((X, Z), dtype=torch.float32, device=P.device)
+    # for a in range(X):
+    #     neighbors = csr_obtain_column_index_for_row(Acsr_row, Acsr_col, a)
+    #     for t in range(Z):
+    #         for a_star in neighbors:
+    #             G[a, t] = G[a, t] + np.log(P[a_star, t])
+    # res = torch.sum(P * G)
+    # res = res / X
+    # return res
+
+    # Build sparse adjacency as a COO tensor:
+    # A[a, a_star] = 1 if a_star is in neighbors(a).
+    # Then we can do G = A @ logP in one parallel operation.
+
+    # print(P.requires_grad) # TODO: remove this after debugging
+    row_indices = []
+    col_indices = []
+    data = []
+
     for a in range(X):
         neighbors = csr_obtain_column_index_for_row(Acsr_row, Acsr_col, a)
-        for t in range(Z):
-            for a_star in neighbors:
-                G[a, t] = G[a, t] + torch.log(P[a_star, t])
-    res = torch.sum(P * G)
-    res = res / X
+        for a_star in neighbors:
+            row_indices.append(a)
+            col_indices.append(a_star)
+            data.append(1.0)
+
+    indices = torch.LongTensor([row_indices, col_indices])
+    values  = torch.FloatTensor(data)
+    A = torch.sparse_coo_tensor(
+        indices, values, size=(X, X), device=P.device, dtype=torch.float32
+    )
+
+    # Compute G[a,t] = Σ_{a_star in neighbors(a)} log(P[a_star,t])
+    logP = torch.log(P)
+    G = torch.sparse.mm(A, logP)  # shape: X×Z
+
+    # Then do the usual res = Σ(P[a,t] * G[a,t]) / X
+    res = - torch.sum(P * G) / X
     return res
 
 
